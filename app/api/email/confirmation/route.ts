@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Resend } from 'resend';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Initialize Resend only if API key is present and not a placeholder
+const resendApiKey = process.env.RESEND_API_KEY;
+const resend = resendApiKey && !resendApiKey.includes('placeholder')
+  ? new Resend(resendApiKey)
+  : null;
 
 export async function POST(request: NextRequest) {
   try {
@@ -123,6 +127,14 @@ export async function POST(request: NextRequest) {
     `;
 
     // Utiliser Resend pour envoyer l'email
+    if (!resend) {
+      console.warn('Resend not configured, skipping email send');
+      return NextResponse.json({
+        success: true,
+        message: 'Email not sent (Resend not configured)'
+      });
+    }
+
     const { data, error } = await resend.emails.send({
       from: 'VerifRenov <noreply@verifrenov.fr>',
       to: [email],
