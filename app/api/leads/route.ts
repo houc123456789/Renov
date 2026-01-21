@@ -34,7 +34,19 @@ export async function POST(request: NextRequest) {
     const utmCampaign = request.nextUrl.searchParams.get('utm_campaign') || null;
     const referer = request.headers.get('referer') || null;
 
-    // Insérer dans Supabase
+    // Insérer dans Supabase si disponible
+    if (!supabase) {
+      // Si pas de Supabase, simuler un ID et continuer
+      console.warn('Supabase not configured, skipping database insert');
+      const mockLeadId = `mock-${Date.now()}`;
+
+      return NextResponse.json({
+        success: true,
+        leadId: mockLeadId,
+        message: 'Lead enregistré (mode démo)',
+      });
+    }
+
     const { data, error } = await supabase
       .from('leads')
       .insert([
@@ -109,6 +121,26 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    // Si c'est un mock lead, retourner des données simulées
+    if (leadId.startsWith('mock-')) {
+      return NextResponse.json({
+        lead: {
+          id: leadId,
+          project_type: 'pac',
+          project_subtype: 'Air-Eau',
+          first_name: 'Démo',
+          postal_code: '75001',
+          surface_m2: 100,
+          income_bracket: 'intermediaire',
+          is_primary_residence: true,
+        },
+      });
+    }
+
+    if (!supabase) {
+      return NextResponse.json({ error: 'Base de données non configurée' }, { status: 503 });
+    }
+
     const { data, error } = await supabase
       .from('leads')
       .select('*')

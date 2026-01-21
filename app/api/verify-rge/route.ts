@@ -12,12 +12,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Vérifier d'abord le cache dans Supabase
-    const { data: cachedData } = await supabase
-      .from('verified_companies')
-      .select('*')
-      .or(`siret.eq.${query},company_name.ilike.%${query}%`)
-      .single();
+    // Vérifier d'abord le cache dans Supabase si disponible
+    let cachedData = null;
+    if (supabase) {
+      const { data } = await supabase
+        .from('verified_companies')
+        .select('*')
+        .or(`siret.eq.${query},company_name.ilike.%${query}%`)
+        .single();
+      cachedData = data;
+    }
 
     // Si trouvé dans le cache et récent (< 24h), le renvoyer
     if (cachedData) {
@@ -57,16 +61,18 @@ export async function POST(request: NextRequest) {
       google_reviews_count: null,
     });
 
-    // Sauvegarder dans le cache
-    await supabase.from('verified_companies').upsert({
-      siret: rgeData.siret,
-      company_name: rgeData.companyName,
-      rge_status: rgeData.rgeStatus,
-      rge_valid_until: rgeData.validUntil,
-      rge_qualifications: rgeData.qualifications,
-      trust_score: trustScore,
-      last_verified_at: new Date().toISOString(),
-    });
+    // Sauvegarder dans le cache si disponible
+    if (supabase) {
+      await supabase.from('verified_companies').upsert({
+        siret: rgeData.siret,
+        company_name: rgeData.companyName,
+        rge_status: rgeData.rgeStatus,
+        rge_valid_until: rgeData.validUntil,
+        rge_qualifications: rgeData.qualifications,
+        trust_score: trustScore,
+        last_verified_at: new Date().toISOString(),
+      });
+    }
 
     return NextResponse.json({
       found: true,

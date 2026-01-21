@@ -14,19 +14,31 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Récupérer les prix de référence depuis la DB
-    const { data: pricingData, error } = await supabase
-      .from('pricing_references')
-      .select('*')
-      .eq('project_type', projectType)
-      .eq('project_subtype', projectSubtype)
-      .single();
+    // Récupérer les prix de référence depuis la DB ou utiliser les valeurs par défaut
+    let pricingData: any = null;
 
-    if (error || !pricingData) {
-      return NextResponse.json(
-        { error: 'Données de prix non disponibles' },
-        { status: 404 }
-      );
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('pricing_references')
+        .select('*')
+        .eq('project_type', projectType)
+        .eq('project_subtype', projectSubtype)
+        .single();
+
+      if (!error && data) {
+        pricingData = data;
+      }
+    }
+
+    // Si pas de DB ou pas de données, utiliser les prix hardcodés
+    if (!pricingData) {
+      pricingData = getDefaultPricing(projectType, projectSubtype);
+      if (!pricingData) {
+        return NextResponse.json(
+          { error: 'Données de prix non disponibles' },
+          { status: 404 }
+        );
+      }
     }
 
     // Ajuster les prix selon la surface si pertinent
@@ -168,4 +180,33 @@ function estimateAnnualSavings(
   }
 
   return 500; // Valeur par défaut
+}
+
+// Prix par défaut si pas de base de données
+function getDefaultPricing(projectType: string, projectSubtype: string): any {
+  const pricingMap: Record<string, Record<string, any>> = {
+    pac: {
+      'Air-Eau': { price_low: 8000, price_avg: 12500, price_high: 18000 },
+      'Air-Air': { price_low: 5000, price_avg: 7500, price_high: 11000 },
+      'Géothermique': { price_low: 15000, price_avg: 22000, price_high: 30000 },
+    },
+    isolation: {
+      'Combles': { price_low: 3000, price_avg: 5000, price_high: 7500 },
+      'Murs extérieurs': { price_low: 8000, price_avg: 12000, price_high: 16000 },
+      'Murs intérieurs': { price_low: 4000, price_avg: 6500, price_high: 9000 },
+      'Sol': { price_low: 3500, price_avg: 5500, price_high: 8000 },
+    },
+    solaire: {
+      'Photovoltaïque': { price_low: 6000, price_avg: 9000, price_high: 13000 },
+      'Thermique': { price_low: 5000, price_avg: 7500, price_high: 10000 },
+      'Hybride': { price_low: 8000, price_avg: 11500, price_high: 15000 },
+    },
+    chaudiere: {
+      'Biomasse': { price_low: 10000, price_avg: 15000, price_high: 22000 },
+      'Gaz condensation': { price_low: 3000, price_avg: 4500, price_high: 6500 },
+      'Électrique': { price_low: 2000, price_avg: 3500, price_high: 5000 },
+    },
+  };
+
+  return pricingMap[projectType]?.[projectSubtype] || null;
 }

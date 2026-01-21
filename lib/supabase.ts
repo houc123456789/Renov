@@ -3,7 +3,15 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// Only create client if URL and key are valid (not empty or placeholder)
+const isValidConfig = supabaseUrl &&
+                      supabaseAnonKey &&
+                      !supabaseUrl.includes('placeholder') &&
+                      !supabaseAnonKey.includes('placeholder');
+
+export const supabase = isValidConfig
+  ? createClient(supabaseUrl, supabaseAnonKey)
+  : null;
 
 // Types pour la base de données
 export type Lead = {
