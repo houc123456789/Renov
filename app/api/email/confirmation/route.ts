@@ -123,14 +123,22 @@ export async function POST(request: NextRequest) {
     `;
 
     // Utiliser Resend pour envoyer l'email
-    const data = await resend.emails.send({
+    const { data, error } = await resend.emails.send({
       from: 'VerifRenov <noreply@verifrenov.fr>',
       to: [email],
       subject: `✓ Demande de devis confirmée - ${firstName}`,
       html: emailHtml,
     });
 
-    return NextResponse.json({ success: true, id: data.id });
+    if (error) {
+      console.error('Resend error:', error);
+      return NextResponse.json(
+        { error: 'Erreur lors de l\'envoi de l\'email' },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ success: true, id: data?.id });
   } catch (error) {
     console.error('Error sending email:', error);
     return NextResponse.json(
