@@ -51,8 +51,8 @@ export async function POST(request: NextRequest) {
 
     // Calculer le trust score
     const trustScore = calculateTrustScore({
-      rge_status: rgeData.rgeStatus,
-      rge_valid_until: rgeData.validUntil,
+      rge_status: rgeData.rgeStatus || null,
+      rge_valid_until: rgeData.validUntil || null,
       google_rating: null,
       google_reviews_count: null,
     });
