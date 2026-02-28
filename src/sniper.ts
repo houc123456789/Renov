@@ -53,7 +53,8 @@ function loadPersistedPositions(): Map<string, Position> {
 const openPositions = loadPersistedPositions()
 const priceHistory  = new Map<string, number[]>()   // prix récents (ticks 500ms)
 const txTimestamps  = new Map<string, number[]>()   // timestamps des txs on-chain sur la pool
-const poolSubs      = new Map<string, number>()     // WebSocket sub IDs
+const poolSubs         = new Map<string, number>()     // WebSocket sub IDs
+const lastKnownPrices = new Map<string, number>()     // Dernier prix connu (pour le dashboard)
 
 // Initialiser le state pour les positions restaurées
 for (const pos of openPositions.values()) {
@@ -188,6 +189,7 @@ async function monitorPosition(position: Position): Promise<void> {
     try {
       const currentPrice = await getTokenPrice(mint)
       if (currentPrice <= 0) return
+      lastKnownPrices.set(mint, currentPrice)
 
       // Historique des prix pour détecter décélération
       const history = priceHistory.get(mint) ?? []
@@ -396,6 +398,11 @@ async function getTokenPrice(mint: string): Promise<number> {
 // ──────────────────────────────────────────
 // Stats
 // ──────────────────────────────────────────
+/** Retourne le dernier prix connu pour le dashboard (sans appel API supplémentaire) */
+export function getLastKnownPrice(mint: string): number {
+  return lastKnownPrices.get(mint) ?? 0
+}
+
 export function getOpenPositions(): Position[] {
   return Array.from(openPositions.values())
 }

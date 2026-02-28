@@ -5,6 +5,7 @@ import { getWatchlist, pruneStaleRuggers }           from './db'
 import { RuggerProfile }                             from './db'
 import { initLogger, printPerfSummary }              from './logger'
 import { config }                                    from './config'
+import { startDashboard }                            from './dashboard'
 
 // ──────────────────────────────────────────
 // Point d'entrée
@@ -13,6 +14,9 @@ async function main(): Promise<void> {
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
   console.log('  🤖 SOLANA SNIPER BOT - Démarrage')
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+
+  // Phase 3 : démarrer le dashboard web temps réel
+  startDashboard()
 
   // Phase 3 : initialiser le journal CSV + afficher la perf historique
   initLogger()
