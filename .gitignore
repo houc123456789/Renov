@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.env
+data/watchlist.json
+data/blacklist.json
