@@ -1,14 +1,12 @@
+import { PublicKey } from '@solana/web3.js'
 import { connection } from './config'
 import { getWatchlist, RuggerProfile } from './db'
 import { EventEmitter } from 'events'
 
 export const monitorEvents = new EventEmitter()
+export const SNIPE_SIGNAL  = 'snipe'
 
-// Emis quand un rugeur connu crée / achète un nouveau token
-// Payload : { rugger: RuggerProfile, mint: string, poolAddress: string }
-export const SNIPE_SIGNAL = 'snipe'
-
-let watchedWallets = new Set<string>()
+let watchedWallets  = new Set<string>()
 let subscriptionIds = new Map<string, number>()
 
 // ──────────────────────────────────────────
@@ -17,28 +15,64 @@ let subscriptionIds = new Map<string, number>()
 export function startMonitor(): void {
   console.log('[Monitor] Démarrage...')
   refreshWatchlist()
-
-  // Rafraîchir la watchlist toutes les 30 secondes
-  // (le discovery engine l'alimente en continu)
   setInterval(() => refreshWatchlist(), 30_000)
 }
 
 // ──────────────────────────────────────────
-// Mise à jour dynamique de la watchlist
+// Mise à jour dynamique : abonne/désabonne les wallets
 // ──────────────────────────────────────────
 function refreshWatchlist(): void {
-  const ruggers = getWatchlist().filter(r => r.worthFollowing)
+  const ruggers      = getWatchlist().filter(r => r.worthFollowing)
+  const worthySet    = new Set(ruggers.map(r => r.wallet))
 
+  // Phase 3 : désabonner les wallets qui ne sont plus worthFollowing
+  for (const [wallet, subId] of subscriptionIds.entries()) {
+    if (!worthySet.has(wallet)) {
+      connection.removeOnLogsListener(subId).catch(() => {})
+      subscriptionIds.delete(wallet)
+      watchedWallets.delete(wallet)
+      console.log(`[Monitor] 🗑️  Désabonné (plus worthFollowing) : ${wallet.slice(0, 8)}...`)
+    }
+  }
+
+  // Abonner les nouveaux rugeurs
   for (const rugger of ruggers) {
     if (watchedWallets.has(rugger.wallet)) continue
-
     watchWallet(rugger)
     watchedWallets.add(rugger.wallet)
+    // Backfill : vérifier les txs récentes pour ne pas rater une création
+    backfillRecentActivity(rugger).catch(() => {})
   }
 
   if (ruggers.length > 0) {
-    console.log(`[Monitor] 👁️  Surveillance de ${watchedWallets.size} rugeurs`)
+    const avgConf = ruggers.reduce((s, r) => s + (r.confidenceScore ?? 0), 0) / ruggers.length
+    console.log(
+      `[Monitor] 👁️  ${watchedWallets.size} rugeurs surveillés | ` +
+      `confiance moy=${(avgConf * 100).toFixed(0)}%`
+    )
   }
+}
+
+// ──────────────────────────────────────────
+// Phase 2 : Backfill des 10 dernières txs pour les nouveaux wallets
+// Évite de rater un token créé pendant la fenêtre de 30s entre refreshs
+// ──────────────────────────────────────────
+async function backfillRecentActivity(rugger: RuggerProfile): Promise<void> {
+  try {
+    const sigs = await connection.getSignaturesForAddress(
+      new PublicKey(rugger.wallet),
+      { limit: 10 },
+      'confirmed'
+    )
+
+    for (const sig of sigs) {
+      if (sig.err) continue
+      // Seulement les txs des 5 dernières minutes
+      const ageMs = Date.now() - (sig.blockTime ?? 0) * 1000
+      if (ageMs > 5 * 60 * 1000) continue
+      await handleWalletActivity(sig.signature, rugger)
+    }
+  } catch { /* non-fatal */ }
 }
 
 // ──────────────────────────────────────────
@@ -52,16 +86,18 @@ function watchWallet(rugger: RuggerProfile): void {
       { mentions: [pubkey] } as any,
       async (logs) => {
         if (logs.err) return
-
-        // Ce wallet a fait une transaction → analyser
         await handleWalletActivity(logs.signature, rugger)
       },
       'confirmed'
     )
 
     subscriptionIds.set(pubkey, subId)
-    console.log(`[Monitor] ✅ Wallet ajouté : ${pubkey} | pump moy=${rugger.avgPumpMultiple.toFixed(2)}x | temps moy=${rugger.avgSecondsBeforeDump.toFixed(0)}s`)
-
+    console.log(
+      `[Monitor] ✅ Ajouté : ${pubkey.slice(0, 8)}... | ` +
+      `pump=${rugger.avgPumpMultiple.toFixed(2)}x | ` +
+      `timing=${rugger.avgSecondsBeforeDump.toFixed(0)}s | ` +
+      `confiance=${((rugger.confidenceScore ?? 0) * 100).toFixed(0)}%`
+    )
   } catch (err) {
     console.error(`[Monitor] Erreur sur wallet ${pubkey}:`, err)
   }
@@ -81,39 +117,27 @@ async function handleWalletActivity(signature: string, rugger: RuggerProfile): P
 
     const accounts = tx.transaction.message.accountKeys
     const creator  = accounts[0]?.pubkey?.toString()
-
-    // Vérifier que c'est bien ce rugeur qui agit
     if (creator !== rugger.wallet) return
 
-    // Chercher un nouveau token dans les balances post-transaction
+    // Nouveaux tokens = présents en post mais pas en pre
     const postTokenBalances = tx.meta.postTokenBalances ?? []
     const preTokenBalances  = tx.meta.preTokenBalances  ?? []
-
-    // Nouveaux tokens = présents en post mais pas en pre
     const newMints = postTokenBalances
       .map(b => b.mint)
       .filter(mint => !preTokenBalances.some(b => b.mint === mint))
 
     if (newMints.length === 0) return
 
-    const mint = newMints[0]
-
-    // Trouver la pool associée
+    const mint        = newMints[0]
     const poolAccount = accounts.find(a => !a.signer && a.writable)
     const poolAddress = poolAccount?.pubkey.toString()
-
     if (!poolAddress) return
 
-    console.log(`[Monitor] 🚨 SIGNAL : rugeur ${rugger.wallet} vient de créer ${mint}`)
+    console.log(
+      `[Monitor] 🚨 SIGNAL : ${rugger.wallet.slice(0, 8)}... vient de créer ${mint.slice(0, 8)}...`
+    )
 
-    // Émettre le signal de snipe
-    monitorEvents.emit(SNIPE_SIGNAL, {
-      rugger,
-      mint,
-      poolAddress,
-    })
+    monitorEvents.emit(SNIPE_SIGNAL, { rugger, mint, poolAddress })
 
-  } catch (err) {
-    // Silencieux
-  }
+  } catch { /* Silencieux */ }
 }

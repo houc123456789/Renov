@@ -1,13 +1,14 @@
 import { config } from './config'
 
 export interface Position {
-  mint: string
-  poolAddress: string
-  entryPrice: number          // prix d'achat en SOL
-  amountSol: number           // SOL investis
-  tokenAmount: number         // tokens détenus
-  openedAt: number            // timestamp ms
-  peakPrice: number           // plus haut observé
+  mint:         string
+  poolAddress:  string
+  entryPrice:   number   // prix d'achat en SOL/token
+  amountSol:    number   // SOL investis
+  tokenAmount:  number   // tokens détenus
+  openedAt:     number   // timestamp ms
+  peakPrice:    number   // plus haut observé
+  ruggerWallet: string   // wallet du rugeur (pour le P&L par rugeur)
 }
 
 export type ExitReason =
@@ -20,50 +21,47 @@ export type ExitReason =
   | 'VOLUME_DROP'
 
 export interface ExitSignal {
-  shouldExit: boolean
-  reason: ExitReason | null
-  sellPercent: number          // % de la position à vendre (0-100)
+  shouldExit:  boolean
+  reason:      ExitReason | null
+  sellPercent: number   // % de la position à vendre (0-100)
 }
 
 // ──────────────────────────────────────────
 // Évaluation à chaque tick de prix
 // ──────────────────────────────────────────
 export function evaluatePosition(position: Position, currentPrice: number): ExitSignal {
-  const now        = Date.now()
-  const elapsed    = (now - position.openedAt) / 1000   // secondes
-  const multiple   = currentPrice / position.entryPrice  // ex: 1.5 = +50%
+  const now      = Date.now()
+  const elapsed  = (now - position.openedAt) / 1000
+  const multiple = currentPrice / position.entryPrice
 
-  // Mettre à jour le peak
   if (currentPrice > position.peakPrice) {
     position.peakPrice = currentPrice
   }
 
-  // ── TIMEOUT (priorité haute) ──────────────
+  // TIMEOUT (priorité haute)
   if (elapsed >= config.timeoutSec) {
     return { shouldExit: true, reason: 'TIMEOUT', sellPercent: 100 }
   }
 
-  // ── STOP LOSS ────────────────────────────
+  // STOP LOSS
   const lossPercent = (1 - multiple) * 100
   if (lossPercent >= config.stopLossPercent) {
     return { shouldExit: true, reason: 'STOP_LOSS', sellPercent: 100 }
   }
 
-  // ── TRAILING STOP ────────────────────────
+  // TRAILING STOP (actif seulement en profit)
   const dropFromPeak = (1 - currentPrice / position.peakPrice) * 100
   const peakMultiple = position.peakPrice / position.entryPrice
-
-  // Trailing stop actif seulement si déjà en profit
   if (peakMultiple >= config.tp1Multiplier && dropFromPeak >= config.trailingStop) {
     return { shouldExit: true, reason: 'TRAILING_STOP', sellPercent: 100 }
   }
 
-  // ── TAKE PROFIT 2 ────────────────────────
+  // TP2
   if (multiple >= config.tp2Multiplier) {
     return { shouldExit: true, reason: 'TP2', sellPercent: 40 }
   }
 
-  // ── TAKE PROFIT 1 ────────────────────────
+  // TP1
   if (multiple >= config.tp1Multiplier) {
     return { shouldExit: true, reason: 'TP1', sellPercent: 40 }
   }
@@ -72,37 +70,51 @@ export function evaluatePosition(position: Position, currentPrice: number): Exit
 }
 
 // ──────────────────────────────────────────
-// Détection de drop de volume (signal pré-dump)
+// Détection de décélération de prix (signal pré-dump)
+// Renommé honnêtement : on compare les prix récents, PAS des volumes.
+// Le vrai volume on-chain est mesuré dans sniper.ts via WebSocket de la pool.
 // ──────────────────────────────────────────
-export function detectVolumeDrop(
-  recentBuyVolumes: number[],  // volumes des N dernières secondes
-  threshold = 0.5              // -50% de volume = danger
+export function detectPriceDeceleration(
+  recentPrices: number[],
+  threshold    = 0.5
 ): boolean {
-  if (recentBuyVolumes.length < 4) return false
+  if (recentPrices.length < 4) return false
 
-  const half = Math.floor(recentBuyVolumes.length / 2)
-  const firstHalf  = recentBuyVolumes.slice(0, half)
-  const secondHalf = recentBuyVolumes.slice(half)
+  const half       = Math.floor(recentPrices.length / 2)
+  const firstHalf  = recentPrices.slice(0, half)
+  const secondHalf = recentPrices.slice(half)
 
-  const avgFirst  = firstHalf.reduce((a, b) => a + b, 0)  / firstHalf.length
+  const avgFirst  = firstHalf.reduce((a, b)  => a + b, 0) / firstHalf.length
   const avgSecond = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length
 
   if (avgFirst === 0) return false
-
-  const drop = (avgFirst - avgSecond) / avgFirst
-  return drop >= threshold
+  return (avgFirst - avgSecond) / avgFirst >= threshold
 }
 
 // ──────────────────────────────────────────
-// Log de sortie
+// Log de sortie avec P&L net (fees déduits)
 // ──────────────────────────────────────────
-export function logExit(position: Position, reason: ExitReason, currentPrice: number, soldPercent: number): void {
-  const pnl      = ((currentPrice - position.entryPrice) / position.entryPrice) * 100
-  const elapsed  = ((Date.now() - position.openedAt) / 1000).toFixed(0)
-  const symbol   = pnl >= 0 ? '✅' : '❌'
+export function logExit(
+  position:     Position,
+  reason:       ExitReason,
+  currentPrice: number,
+  soldPercent:  number,
+  feesSol       = config.solanaFeeSol
+): void {
+  const soldFraction = soldPercent / 100
+  const investedSol  = position.amountSol * soldFraction
+  const grossPnlPct  = ((currentPrice - position.entryPrice) / position.entryPrice) * 100
+  const grossPnlSol  = investedSol * (grossPnlPct / 100)
+  const netPnlSol    = grossPnlSol - feesSol
+  const elapsed      = ((Date.now() - position.openedAt) / 1000).toFixed(0)
+  const symbol       = netPnlSol >= 0 ? '✅' : '❌'
 
   console.log(
-    `[Exit] ${symbol} ${reason} | ${pnl >= 0 ? '+' : ''}${pnl.toFixed(1)}% | ` +
-    `Vendu ${soldPercent}% | ${elapsed}s dans la position | Mint=${position.mint}`
+    `[Exit] ${symbol} ${reason} | ` +
+    `brut=${grossPnlPct >= 0 ? '+' : ''}${grossPnlPct.toFixed(1)}% | ` +
+    `net=${netPnlSol >= 0 ? '+' : ''}${netPnlSol.toFixed(4)} SOL | ` +
+    `fees=${feesSol.toFixed(5)} SOL | ` +
+    `vendu ${soldPercent}% | ${elapsed}s | ` +
+    `mint=${position.mint.slice(0, 8)}...`
   )
 }
